@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>内容管理 · 腾讯频道</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}" />
+</head>
+<body>
+  <header class="panel-site-header">
+    <div class="panel-site-header-inner">
+      <button type="button" class="btn-ghost" id="btnBack" title="浏览器历史返回">← 返回上一页</button>
+      <div class="panel-site-title">
+        <h1>内容管理</h1>
+        <p>从「我的频道」进入浏览版块、频道主页帖子、帖子详情与评论。<a href="#/automation/openai">OpenAI 配置</a> · <a href="#/automation/jobs">定时任务</a> · <a href="/console">脚本控制台</a> · <a href="/">刷新主页</a></p>
+      </div>
+    </div>
+  </header>
+  <div id="toastHost" class="toast-host" aria-live="polite"></div>
+  <div id="app" class="panel-wrap">加载中…</div>
+  <script src="{{ url_for('static', filename='panel.js') }}"></script>
+</body>
+</html>

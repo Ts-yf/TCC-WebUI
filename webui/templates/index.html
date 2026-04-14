@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>腾讯频道社区 · 本地控制台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <h1>腾讯频道社区 · 本地控制台</h1>
+    <p id="cfgLine">加载配置… · <a href="/" style="color:var(--accent);">返回内容管理主页</a></p>
+  </header>
+  <div class="layout">
+    <aside class="panel">
+      <h2>Token</h2>
+      <div class="token-box stack">
+        <label for="tokenInput">QQ AI Connect Token</label>
+        <input type="password" id="tokenInput" autocomplete="off" placeholder="从 connect.qq.com/ai 获取" style="width:100%;padding:0.45rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);" />
+        <div class="row">
+          <button type="button" class="btn-primary" id="btnSaveToken">保存到当前目录 .env</button>
+          <button type="button" class="btn-ghost" id="btnVerify">连通性自检</button>
+        </div>
+        <p class="hint" id="tokenHint"></p>
+      </div>
+
+      <h2>选择功能</h2>
+      <label for="toolSelect">脚本</label>
+      <select id="toolSelect"></select>
+      <p class="hint">所有请求均由后端调用对应 Python 脚本（stdin JSON）完成。</p>
+
+      <div id="formMount"></div>
+      <div class="row" style="margin-top:1rem;">
+        <button type="button" class="btn-primary" id="btnRun">执行</button>
+      </div>
+    </aside>
+    <main class="output">
+      <h2 style="font-size:0.75rem;color:var(--muted);margin:0 0 0.5rem;">输出</h2>
+      <pre id="out">请选择脚本并填写参数，点击「执行」。</pre>
+    </main>
+  </div>
+  <script>
+(function () {
+  const CAT_LABEL = {
+    "feed-read": "内容 · 读",
+    "feed-write": "内容 · 写",
+    "feed-op": "内容 · 运营",
+    "manage-read": "频道 · 读",
+    "manage-write": "频道 · 写",
+  };
+
+  const toolSelect = document.getElementById("toolSelect");
+  const formMount = document.getElementById("formMount");
+  const out = document.getElementById("out");
+  const cfgLine = document.getElementById("cfgLine");
+  const tokenHint = document.getElementById("tokenHint");
+
+  let toolsFlat = [];
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function showOut(obj) {
+    out.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+  }
+
+  fetch("/api/config")
+    .then((r) => r.json())
+    .then((c) => {
+      cfgLine.innerHTML =
+        '<span class="status-dot unk"></span> Token 文件：<code>' +
+        esc(c.dotenvPath) +
+        "</code>";
+    })
+    .catch(() => {
+      cfgLine.textContent = "无法读取配置";
+    });
+
+  function propLabel(name, spec) {
+    const d = (spec && spec.description) ? String(spec.description).slice(0, 80) : name;
+    return d;
+  }
+
+  function buildFeedFields(manifest) {
+    const params = manifest.parameters || {};
+    const props = params.properties || {};
+    const required = new Set(params.required || []);
+    const frag = document.createDocumentFragment();
+    for (const [name, spec] of Object.entries(props)) {
+      const wrap = document.createElement("div");
+      const lab = document.createElement("label");
+      lab.htmlFor = "f_" + name;
+      lab.className = required.has(name) ? "req" : "";
+      lab.textContent = propLabel(name, spec) + " (" + name + ")";
+      wrap.appendChild(lab);
+
+      const t = spec.type || "string";
+      const en = spec.enum;
+
+      if (en && Array.isArray(en)) {
+        const sel = document.createElement("select");
+        sel.id = "f_" + name;
+        sel.dataset.key = name;
+        sel.dataset.kind = "enum";
+        if (t === "integer" || t === "number") sel.dataset.ptype = t;
+        if (!required.has(name)) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "（未选）";
+          sel.appendChild(o);
+        }
+        en.forEach((v) => {
+          const o = document.createElement("option");
+          o.value = String(v);
+          o.textContent = String(v);
+          if (spec.default !== undefined && v === spec.default) o.selected = true;
+          sel.appendChild(o);
+        });
+        wrap.appendChild(sel);
+      } else if (t === "boolean") {
+        const sel = document.createElement("select");
+        sel.id = "f_" + name;
+        sel.dataset.key = name;
+        sel.dataset.kind = "bool";
+        [["", "（未选）"], ["true", "true"], ["false", "false"]].forEach(([v, l]) => {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = l;
+          sel.appendChild(o);
+        });
+        wrap.appendChild(sel);
+      } else if (t === "integer" || t === "number") {
+        const inp = document.createElement("input");
+        inp.type = "number";
+        inp.id = "f_" + name;
+        inp.dataset.key = name;
+        inp.dataset.kind = "number";
+        if (spec.default !== undefined) inp.value = String(spec.default);
+        wrap.appendChild(inp);
+      } else if (t === "array" || t === "object") {
+        const ta = document.createElement("textarea");
+        ta.id = "f_" + name;
+        ta.dataset.key = name;
+        ta.dataset.kind = "json";
+        ta.placeholder = t === "array" ? "[]" : "{}";
+        wrap.appendChild(ta);
+      } else {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.id = "f_" + name;
+        inp.dataset.key = name;
+        inp.dataset.kind = "string";
+        if (name === "file_path" || name.endsWith("_path")) {
+          inp.type = "file";
+          inp.dataset.kind = "file";
+        }
+        wrap.appendChild(inp);
+      }
+      frag.appendChild(wrap);
+    }
+    return frag;
+  }
+
+  function buildManageFields(fields) {
+    const frag = document.createDocumentFragment();
+    (fields || []).forEach((f) => {
+      const wrap = document.createElement("div");
+      const lab = document.createElement("label");
+      lab.htmlFor = "m_" + f.name;
+      lab.className = f.required ? "req" : "";
+      lab.textContent = (f.label || f.name) + " (" + f.name + ")";
+      wrap.appendChild(lab);
+      const w = f.widget || "";
+
+      if (f.enum) {
+        const sel = document.createElement("select");
+        sel.id = "m_" + f.name;
+        sel.dataset.key = f.name;
+        sel.dataset.kind = "enum";
+        if (!f.required) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "（未选）";
+          sel.appendChild(o);
+        }
+        f.enum.forEach((v) => {
+          const o = document.createElement("option");
+          o.value = String(v);
+          o.textContent = String(v);
+          if (f.default !== undefined && v === f.default) o.selected = true;
+          sel.appendChild(o);
+        });
+        wrap.appendChild(sel);
+      } else if (f.type === "boolean") {
+        const sel = document.createElement("select");
+        sel.id = "m_" + f.name;
+        sel.dataset.key = f.name;
+        sel.dataset.kind = "bool";
+        [["", "（未选）"], ["true", "true"], ["false", "false"]].forEach(([v, l]) => {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = l;
+          sel.appendChild(o);
+        });
+        if (f.default === true || f.default === false) sel.value = String(f.default);
+        wrap.appendChild(sel);
+      } else if (f.type === "integer") {
+        const inp = document.createElement("input");
+        inp.type = "number";
+        inp.id = "m_" + f.name;
+        inp.dataset.key = f.name;
+        inp.dataset.kind = "number";
+        if (f.default !== undefined) inp.value = String(f.default);
+        wrap.appendChild(inp);
+      } else if (f.type === "json" || w === "textarea") {
+        const ta = document.createElement("textarea");
+        ta.id = "m_" + f.name;
+        ta.dataset.key = f.name;
+        ta.dataset.kind = "json";
+        wrap.appendChild(ta);
+      } else if (w === "file") {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.id = "m_" + f.name;
+        inp.dataset.key = f.name;
+        inp.dataset.kind = "file";
+        wrap.appendChild(inp);
+      } else {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.id = "m_" + f.name;
+        inp.dataset.key = f.name;
+        inp.dataset.kind = "string";
+        if (f.default !== undefined) inp.value = String(f.default);
+        wrap.appendChild(inp);
+      }
+      if (f.description) {
+        const h = document.createElement("p");
+        h.className = "hint";
+        h.textContent = f.description;
+        wrap.appendChild(h);
+      }
+      frag.appendChild(wrap);
+    });
+    return frag;
+  }
+
+  function collectParams() {
+    const params = {};
+    const files = {};
+    formMount.querySelectorAll("[data-key]").forEach((el) => {
+      const key = el.dataset.key;
+      const k = el.dataset.kind;
+      if (k === "file") {
+        const fi = el;
+        if (fi.files && fi.files.length) files[key] = fi.files[0];
+        return;
+      }
+      let v;
+      if (k === "enum") {
+        v = el.value;
+        if (v === "") return;
+        const pt = el.dataset.ptype;
+        if (pt === "integer") v = parseInt(v, 10);
+        else if (pt === "number") v = parseFloat(v);
+      } else if (k === "bool") {
+        if (el.value === "") return;
+        v = el.value === "true";
+      } else if (k === "number") {
+        if (el.value === "") return;
+        v = Number(el.value);
+      } else if (k === "json") {
+        const t = el.value.trim();
+        if (!t) return;
+        v = JSON.parse(t);
+      } else {
+        v = el.value;
+        if (v === "") return;
+      }
+      params[key] = v;
+    });
+    return { params, files };
+  }
+
+  function renderForm() {
+    formMount.innerHTML = "";
+    const id = toolSelect.value;
+    const t = toolsFlat.find((x) => x.selId === id);
+    if (!t) return;
+    if (t.kind === "feed" && t.manifest) {
+      formMount.appendChild(buildFeedFields(t.manifest));
+    } else if (t.kind === "manage") {
+      formMount.appendChild(buildManageFields(t.fields));
+    } else {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = t.load_error || "无法加载表单";
+      formMount.appendChild(p);
+    }
+  }
+
+  function populateSelect(data) {
+    toolsFlat = [];
+    toolSelect.innerHTML = "";
+    const feed = data.feed || [];
+    const manage = data.manage || [];
+
+    feed.forEach((item, i) => {
+      const selId = "feed:" + i;
+      const man = item.manifest || {};
+      const title = man.name || item.id;
+      const label = CAT_LABEL[item.category] || item.category;
+      toolsFlat.push({
+        selId,
+        kind: "feed",
+        path: item.id,
+        manifest: item.manifest,
+        load_error: item.load_error,
+        category: item.category,
+      });
+      const opt = document.createElement("option");
+      opt.value = selId;
+      opt.textContent = "[" + label + "] " + title;
+      toolSelect.appendChild(opt);
+    });
+
+    manage.forEach((item, i) => {
+      const selId = "manage:" + i;
+      toolsFlat.push({
+        selId,
+        kind: "manage",
+        path: item.path,
+        fields: item.fields,
+        category: item.category,
+      });
+      const opt = document.createElement("option");
+      opt.value = selId;
+      const label = CAT_LABEL[item.category] || item.category;
+      opt.textContent = "[" + label + "] " + (item.label || item.id);
+      toolSelect.appendChild(opt);
+    });
+
+    if (toolsFlat.length) {
+      toolSelect.value = toolsFlat[0].selId;
+      renderForm();
+    }
+  }
+
+  toolSelect.addEventListener("change", renderForm);
+
+  document.getElementById("btnSaveToken").addEventListener("click", () => {
+    const token = document.getElementById("tokenInput").value.trim();
+    tokenHint.textContent = "";
+    fetch("/api/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok) {
+          tokenHint.textContent = "已写入 .env；mcporter: " + (d.result.mcporterOk ? "ok" : d.result.mcporterMessage);
+        } else {
+          tokenHint.textContent = d.error || "保存失败";
+        }
+      })
+      .catch((e) => {
+        tokenHint.textContent = String(e);
+      });
+  });
+
+  document.getElementById("btnVerify").addEventListener("click", () => {
+    showOut("请求中…");
+    fetch("/api/verify", { method: "POST" })
+      .then((r) => r.json())
+      .then(showOut)
+      .catch((e) => showOut(String(e)));
+  });
+
+  document.getElementById("btnRun").addEventListener("click", () => {
+    const id = toolSelect.value;
+    const t = toolsFlat.find((x) => x.selId === id);
+    if (!t) return;
+    let body;
+    try {
+      const { params, files } = collectParams();
+      const hasFile = Object.keys(files).length > 0;
+      if (hasFile) {
+        const fd = new FormData();
+        fd.append("tool", t.path);
+        fd.append("params", JSON.stringify(params));
+        Object.entries(files).forEach(([k, file]) => fd.append(k, file));
+        body = { _formData: fd };
+      } else {
+        body = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: t.path, params }),
+        };
+      }
+    } catch (e) {
+      showOut({ error: "参数解析失败", detail: String(e.message || e) });
+      return;
+    }
+
+    showOut("执行中…");
+    const req =
+      body._formData != null
+        ? fetch("/api/run", { method: "POST", body: body._formData })
+        : fetch("/api/run", body);
+    req
+      .then((r) => r.json())
+      .then(showOut)
+      .catch((e) => showOut(String(e)));
+  });
+
+  fetch("/api/tools")
+    .then((r) => r.json())
+    .then(populateSelect)
+    .catch((e) => {
+      showOut("加载工具列表失败: " + e);
+    });
+})();
+  </script>
+</body>
+</html>
